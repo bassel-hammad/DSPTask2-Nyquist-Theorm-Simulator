@@ -1,7 +1,6 @@
-from scipy import fft
 import numpy as np
-import pandas as pd
-class signal():
+
+class Signal():
     def __init__(self):
         self.signal_with_noise=[]
         self.MAX_SAMPLES = 10000
@@ -28,6 +27,12 @@ class signal():
         
        
     def sample_signal(self, sample_freq=-1):
+        if self.MAX_SAMPLES == 0 or len(self.x_data) == 0:
+            self.reconstructed = np.array([])
+            self.samples_time = np.array([])
+            self.samples_amplitude = np.array([])
+            return
+
         if sample_freq == -1:
             self.fsampling = 2 * self.Max_frequency
         else:
@@ -39,9 +44,7 @@ class signal():
             self.samples_amplitude = np.zeros(self.MAX_SAMPLES)  # Or set it to an appropriate default
             return
 
-        # sample_freq=sample_freq # Nyquist rate (Hz)
         time_step = 1 / self.fsampling  # Time interval between samples (seconds)
-        print(self.fsampling)
 
         # Generate the time array based on the sample frequency
         max_time = self.x_data[self.MAX_SAMPLES - 1]
@@ -53,10 +56,17 @@ class signal():
 
         self.samples_time = sampled_time
         self.samples_amplitude = sampled_amplitude
-        self.fsampling = sample_freq
         self.reconstruct_from_samples()
 
     def reconstruct_from_samples(self):
+        if len(self.samples_time) == 0:
+            self.reconstructed = np.zeros(self.MAX_SAMPLES)
+            return
+
+        if len(self.samples_time) == 1:
+            self.reconstructed = np.full(self.MAX_SAMPLES, self.samples_amplitude[0])
+            return
+
         self.reconstructed = np.array([])
         sinc_ = np.sinc(((np.tile(self.x_data, (len(self.samples_time), 1))) - self.samples_time[:, None]) / (self.samples_time[1] - self.samples_time[0]))
         self.reconstructed = np.dot(self.samples_amplitude, sinc_)
@@ -65,6 +75,9 @@ class signal():
         self.difference_original_reconstructed = self.y_data - self.reconstructed
 
     def add_noise(self,snr):
+        if len(self.y_data) == 0:
+            return
+
         signal=self.y_data
         signal_power = np.var(self.y_data) # Calculate signal power
         SNR_dB = snr # Set desired SNR in dB

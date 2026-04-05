@@ -1,23 +1,22 @@
 import sys
-import os
 import csv
 import pandas as pd
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog
-from PyQt5.QtWidgets import QWidget
+from PyQt5 import QtCore, QtWidgets
+from PyQt5.QtWidgets import QFileDialog
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from signals import signal
-from sinwaves import sinwaves
+from signals import Signal
+from sinwaves import SineWave
+from signal_service import extract_fmax_from_csv, sum_sine_waves
 import wfdb
 
 
 class Ui_MainWindow(object):
     def __init__(self):
         self.MainWindow = None
-        self.sinwaves_lst = []
-        self.currentSinIndex = 0
+        self.sine_waves = []
+        self.current_sine_index = 0
         self.x = np.linspace(0, 2 * np.pi, 10000)
         self.count = 1
         # Initialize default values for frequency and amplitude
@@ -185,8 +184,8 @@ class Ui_MainWindow(object):
         self.tabWidget.setCurrentIndex(1)
         QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
-        self.my_siganl = signal()
-        self.my_siganl.upload_signal_data([1, 2], [2, 3])
+        self.my_signal = Signal()
+        self.my_signal.upload_signal_data([1, 2], [2, 3])
 
         # create canvas_1,2,3
         self.canvas_1 = FigureCanvas(plt.figure())
@@ -224,34 +223,29 @@ class Ui_MainWindow(object):
         self.init_empty_canvases()
 
         # siganl of sliders
-        self.FsampleSlider.valueChanged.connect(self.my_siganl.sample_signal)
+        self.FsampleSlider.valueChanged.connect(self.my_signal.sample_signal)
         self.FsampleSlider.valueChanged.connect(self.draw_plots)
-        self.SNR_Slider.valueChanged.connect(self.my_siganl.add_noise)
+        self.SNR_Slider.valueChanged.connect(self.my_signal.add_noise)
         self.SNR_Slider.valueChanged.connect(self.draw_plots)
 
 
         self.saveButton.clicked.connect(self.save_plot_data_as_csv)
         # Connect the currentIndexChanged signal of the combo box to the slot function
         # self.sinComboBox.currentIndexChanged.connect(self.plot_selected_sinwave)
-        self.sinComboBox.currentIndexChanged.connect(self.change_currentSinIndex)
+        self.sinComboBox.currentIndexChanged.connect(self.change_current_sine_index)
         self.sinComboBox.currentIndexChanged.connect(self.plot_selected_sinwave)
-        self.removeSinbutton.clicked.connect(self.RemoveSinwave)
+        self.removeSinbutton.clicked.connect(self.remove_sine_wave)
 
 
         #connect composeButton => to move created signal to studio
-        self.composeButton.clicked.connect(self.load_Composed)
+        self.composeButton.clicked.connect(self.load_composed)
 
     def init_empty_canvases(self):
         # Create empty subplots for the canvases
         for canvas in [self.canvas_1, self.canvas_2, self.canvas_3, self.canvas_sin, self.canvas_added]:
             canvas.figure.add_subplot(111)
 
-        # Add the empty canvases to the layouts
-        self.signalLayout.layout().addWidget(self.canvas_1)
-        self.signalLayout.layout().addWidget(self.canvas_2)
-        self.signalLayout.layout().addWidget(self.canvas_3)
-        self.composeLayout.layout().addWidget(self.canvas_sin)
-        self.composeLayout.layout().addWidget(self.canvas_added)
+        # Canvases are added to layouts in setupUi.
 
     def open_csv_file(self):
         file_dialog = QFileDialog()
@@ -262,9 +256,11 @@ class Ui_MainWindow(object):
             # Check the file extension to determine the type
             if file_path.endswith('.csv'):
                 df = pd.read_csv(file_path)
+                if df.shape[1] < 2:
+                    return
                 time = df.iloc[:, 0]
                 magnitude = df.iloc[:, 1]
-                Fmax = df.iloc[2, 2]
+                Fmax = extract_fmax_from_csv(df, time)
                 self.update_signal_data(time, magnitude, Fmax)
             elif file_path.endswith('.hea'):
                 
@@ -283,15 +279,15 @@ class Ui_MainWindow(object):
                 self.update_signal_data(Xcoordinates, Ycoordinates, Fmax)
 
     def update_signal_data(self,signal_time,signal_magnitude,max_freq):
-        self.my_siganl.upload_signal_data(signal_time, signal_magnitude,max_freq)
+        self.my_signal.upload_signal_data(signal_time, signal_magnitude,max_freq)
 
-        self.FsampleSlider.setRange(0, int(10 * self.my_siganl.Max_frequency))
-        self.FsampleSlider.setValue(2*int(self.my_siganl.Max_frequency))
+        self.FsampleSlider.setRange(0, int(10 * self.my_signal.Max_frequency))
+        self.FsampleSlider.setValue(2*int(self.my_signal.Max_frequency))
         self.FsampleDisp.display((self.FsampleSlider.value()))
-        self.FsampleSlider.setSingleStep(int(self.my_siganl.Max_frequency))
-        self.Max_freq_Display.display((self.my_siganl.Max_frequency))
+        self.FsampleSlider.setSingleStep(int(self.my_signal.Max_frequency))
+        self.Max_freq_Display.display((self.my_signal.Max_frequency))
         # Clear the previous plot
-        self.my_siganl.sample_signal()
+        self.my_signal.sample_signal()
         self.draw_plots()
 
 
@@ -303,64 +299,61 @@ class Ui_MainWindow(object):
         self.FsampleDisp.display(self.FsampleSlider.value())
         
         ax = self.canvas_1.figure.add_subplot(1, 1, 1)
-        ax.plot(self.my_siganl.x_data, self.my_siganl.signal_with_noise, linewidth=3)
+        ax.plot(self.my_signal.x_data, self.my_signal.signal_with_noise, linewidth=3)
         ax.set_xlabel("Time")
         ax.set_ylabel("Magnitude")
         ax.set_title("Original Signal")
         ax.grid(True)
-        ax.plot(self.my_siganl.samples_time, self.my_siganl.samples_amplitude, 'ro', markersize=3,
+        ax.plot(self.my_signal.samples_time, self.my_signal.samples_amplitude, 'ro', markersize=3,
                 label='Sampled Signal')
         ax_reconstructed = self.canvas_2.figure.add_subplot(1, 1, 1)
         ax_reconstructed.set_xlabel("Time")
         ax_reconstructed.set_ylabel("Magnitude")
         ax_reconstructed.set_title("Reconstructed Signal")
         ax_reconstructed.grid(True)
-        ax_reconstructed.plot(self.my_siganl.x_data, self.my_siganl.reconstructed, linewidth=3)
-        self.my_siganl.calc_difference()
+        ax_reconstructed.plot(self.my_signal.x_data, self.my_signal.reconstructed, linewidth=3)
+        self.my_signal.calc_difference()
         ax_difference = self.canvas_3.figure.add_subplot(1, 1, 1)
         ax_difference.set_xlabel("Time")
         ax_difference.set_ylabel("Magnitude")
         ax_difference.set_title("difference Signal")
         ax_difference.grid(True)
-        ax_difference.plot(self.my_siganl.x_data, self.my_siganl.difference_original_reconstructed, linewidth=3)
+        ax_difference.plot(self.my_signal.x_data, self.my_signal.difference_original_reconstructed, linewidth=3)
 
         # Redraw the canvas
         self.canvas_1.draw()
         self.canvas_2.draw()
         self.canvas_3.draw()
 
-    def change_currentSinIndex(self):
-        self.currentSinIndex = self.sinComboBox.currentIndex()
-        print("currentSinIndex " + str(self.currentSinIndex))
-        for sinwave in self.sinwaves_lst:
-            print(f"Name: {sinwave.name}, Frequency: {sinwave._frequency}, Amplitude: {sinwave._amplitude}")
+    def change_current_sine_index(self):
+        self.current_sine_index = self.sinComboBox.currentIndex()
 
     def create_new_sinwave(self):
         self.frequency = 1.0
         self.amplitude = 1.0
 
-        new_sinwaves = sinwaves(frequency=self.frequency, amplitude=self.amplitude)
+        new_sinwaves = SineWave(frequency=self.frequency, amplitude=self.amplitude)
         new_sinwaves.name = f"SineWave{self.count}"
         self.count+=1
 
-        self.sinwaves_lst.append(new_sinwaves)
+        self.sine_waves.append(new_sinwaves)
 
-        # call Function updateComboBox To add names of waves in comboBox
-        self.updateComboBox()
+        # Add wave names to combo box.
+        self.update_combo_box()
 
-        self.sinComboBox.setCurrentIndex(len(self.sinwaves_lst) - 1)
+        self.sinComboBox.setCurrentIndex(len(self.sine_waves) - 1)
 
         self.plot_selected_sinwave()
 
     def plot_selected_sinwave(self):
 
-        if (len(self.sinwaves_lst) == 0):
+        if (len(self.sine_waves) == 0):
             self.canvas_sin.figure.clear()
             self.canvas_added.figure.clear()
             return
 
         # Get the index of the selected sinwave
-        selected_sinwave = self.sinwaves_lst[self.currentSinIndex]
+        selected_sinwave = self.sine_waves[self.current_sine_index]
 
         # Clear the canvas for the selected sinwave
         self.canvas_sin.figure.clear()
@@ -382,9 +375,9 @@ class Ui_MainWindow(object):
     def change_frequency(self, value):
         # Get the slider value and use it to update the frequency
         self.frequency = value / 10.0  # You may need to adjust this scaling factor
-        if self.sinwaves_lst:  # Check if there are sine waves in the list
-            if 0 <= self.currentSinIndex < len(self.sinwaves_lst):
-                selected_sinwave = self.sinwaves_lst[self.currentSinIndex]
+        if self.sine_waves:  # Check if there are sine waves in the list
+            if 0 <= self.current_sine_index < len(self.sine_waves):
+                selected_sinwave = self.sine_waves[self.current_sine_index]
                 selected_sinwave.set_frequency(self.frequency)
                 selected_sinwave.update_data()
                 self.plot_selected_sinwave()  # Update the plot
@@ -392,9 +385,9 @@ class Ui_MainWindow(object):
     def change_amplitude(self, value):
         # Get the slider value and use it to update the frequency
         self.amplitude = value / 10.0  # You may need to adjust this scaling factor
-        if self.sinwaves_lst:  # Check if there are sine waves in the list
-            if 0 <= self.currentSinIndex < len(self.sinwaves_lst):
-                selected_sinwave = self.sinwaves_lst[self.currentSinIndex]
+        if self.sine_waves:  # Check if there are sine waves in the list
+            if 0 <= self.current_sine_index < len(self.sine_waves):
+                selected_sinwave = self.sine_waves[self.current_sine_index]
                 selected_sinwave.set_amplitude(self.amplitude)
                 selected_sinwave.update_data()
                 self.plot_selected_sinwave()  # Update the plot
@@ -403,7 +396,7 @@ class Ui_MainWindow(object):
         filename = f"composer_data{self.count}.csv"
         with open(filename, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            y = self.sum_sinwaves()
+            y = self.compose_wave_sum()
             writer.writerow(['x', 'y','Fmax'])
             for i in range(len(self.x)):
                 writer.writerow([self.x[i], y[i],self.max_frequency])
@@ -413,7 +406,7 @@ class Ui_MainWindow(object):
     def plot_composer(self):
         self.canvas_added.figure.clear()
         ax = self.canvas_added.figure.add_subplot(111)
-        y = self.sum_sinwaves()
+        y = self.compose_wave_sum()
         # Plot the selected sinwave with the updated frequency
         ax.plot(self.x, y)
         ax.set_xlabel("Time")
@@ -423,38 +416,28 @@ class Ui_MainWindow(object):
         # Redraw the canvas
         self.canvas_added.draw()
 
-    def sum_sinwaves(self):
-        sum_amplitude = 0
-        self.max_frequency = 0
-        y_summed = 0
-        # Calculate the sum of amplitudes and find the maximum frequency
-        for sinwaves in self.sinwaves_lst:
-            sum_amplitude += sinwaves.get_amplitude()
-            if sinwaves.get_frequency() > self.max_frequency:
-                self.max_frequency = sinwaves.get_frequency()
-
-        # Calculate y-axis values for the summed sine wave
-        for sinwaves in self.sinwaves_lst:
-            y_summed += sinwaves.Yaxis
-        # RETURN Y_SUMMED TO PLOT IT
+    def compose_wave_sum(self):
+        y_summed, self.max_frequency = sum_sine_waves(self.sine_waves, len(self.x))
         return y_summed
-    
-    def RemoveSinwave(self):
-        if(len(self.sinwaves_lst)!=0):
-         index = self.sinComboBox.currentIndex()
-         self.sinwaves_lst.pop(index)
-        self.updateComboBox()
-        self.sum_sinwaves()
+
+    def remove_sine_wave(self):
+        if len(self.sine_waves) != 0:
+            index = self.sinComboBox.currentIndex()
+            if 0 <= index < len(self.sine_waves):
+                self.sine_waves.pop(index)
+        self.update_combo_box()
+        self.compose_wave_sum()
+        self.plot_selected_sinwave()
 
     # add sinwaves names to comboBox
-    def updateComboBox(self):
+    def update_combo_box(self):
         self.sinComboBox.clear()  # Clear the existing items
-        for sinwave in self.sinwaves_lst:
+        for sinwave in self.sine_waves:
             self.sinComboBox.addItem(sinwave.name)
 
     #fuction to move created signal  to viewer to try Sample & Recover:
-    def load_Composed(self):
-        y = self.sum_sinwaves()
+    def load_composed(self):
+        y = self.compose_wave_sum()
         self.update_signal_data(self.x,y,self.max_frequency)
 
     def retranslateUi(self, MainWindow):
@@ -485,4 +468,5 @@ def main():
     sys.exit(app.exec_())  # Run the application event loop
 
 
-main()
+if __name__ == "__main__":
+    main()

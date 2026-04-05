@@ -1,11 +1,10 @@
-from scipy import fft
 import numpy as np
 
 
 MAX_SAMPLES = 10000
 
 
-class sinwaves():
+class SineWave():
     def __init__(self, amplitude=1.0, frequency=1.0):
         self._amplitude = amplitude
         self._frequency = frequency  # Use a private attribute for frequency
